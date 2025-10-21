@@ -14,10 +14,22 @@
         <h1>CSS Quiz - Created by Rameel Tanveer</h1>
         <p class="muted">Enter your name to start. One attempt per name.</p>
         <input id="nameInput" type="text" placeholder="Your full name" />
+        <div style="margin-top:8px; text-align:left;">
+          <label class="small muted">Webhook URL (optional, for admin):</label>
+          <input id="webhookInput" type="text" placeholder="https://script.google.com/macros/s/xxx/exec" />
+          <div style="display:flex; gap:8px; margin-top:6px;">
+            <button id="saveWebhookBtn" class="btn ghost">Save Webhook</button>
+            <button id="clearWebhookBtn" class="btn ghost">Clear Webhook</button>
+          </div>
+          <div id="webhookMsg" class="small muted" style="margin-top:6px;"></div>
+        </div>
         <div class="actions">
           <button id="startWithName" class="btn primary">Start Quiz</button>
         </div>
         <p id="loginMsg" class="muted small"></p>
+        <div style="margin-top:10px;">
+          <button id="exportDataBtn" class="btn ghost">Export Attempts (JSON)</button>
+        </div>
       </div>
     </section>
 

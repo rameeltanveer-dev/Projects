@@ -6,6 +6,8 @@
    - Answer lock: cannot change after selection
    - Auto-correct highlight
    - Result modal with topic-wise analysis
+   - Export attempts JSON
+   - Optional webhook (Google Apps Script) to send results to Google Sheet
 */
 
 // ---------- CONFIG ----------
@@ -88,6 +90,13 @@ const nameInput = document.getElementById('nameInput');
 const startWithName = document.getElementById('startWithName');
 const loginMsg = document.getElementById('loginMsg');
 
+const webhookInput = document.getElementById('webhookInput');
+const saveWebhookBtn = document.getElementById('saveWebhookBtn');
+const clearWebhookBtn = document.getElementById('clearWebhookBtn');
+const webhookMsg = document.getElementById('webhookMsg');
+
+const exportDataBtn = document.getElementById('exportDataBtn');
+
 const quizApp = document.getElementById('quizApp');
 const progressText = document.getElementById('progressText');
 const topicBadge = document.getElementById('topicBadge');
@@ -112,7 +121,7 @@ function formatTime(s){ const m=Math.floor(s/60).toString().padStart(2,'0'); con
 
 function shuffle(a){ for(let i=a.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [a[i],a[j]]=[a[j],a[i]] } return a; }
 
-// localStorage check: store attempted names as object {name:true}
+// localStorage check: store attempted names as object {name:{time, result}}
 function hasAttempted(name){
   const raw = localStorage.getItem(attemptedKey);
   if(!raw) return false;
@@ -126,6 +135,15 @@ function markAttempted(name, resultObj){
   localStorage.setItem(attemptedKey, JSON.stringify(t));
 }
 
+// webhook storage
+const WEBHOOK_KEY = 'css_quiz_webhook_v1';
+function getSavedWebhook(){ return localStorage.getItem(WEBHOOK_KEY) || ''; }
+function saveWebhook(url){
+  if(!url){ localStorage.removeItem(WEBHOOK_KEY); webhookMsg.textContent = 'Webhook cleared.'; return; }
+  localStorage.setItem(WEBHOOK_KEY, url.trim()); webhookMsg.textContent = 'Webhook saved.'; webhookInput.value = url.trim();
+}
+function clearWebhook(){ localStorage.removeItem(WEBHOOK_KEY); webhookInput.value = ''; webhookMsg.textContent = 'Webhook cleared.'; }
+
 // ---------- START QUIZ FLOW ----------
 startWithName.addEventListener('click', ()=>{
   const val = (nameInput.value || '').trim();
@@ -138,13 +156,41 @@ startWithName.addEventListener('click', ()=>{
 // allow Enter key
 nameInput.addEventListener('keydown', (e)=>{ if(e.key === 'Enter') startWithName.click(); });
 
+// webhook buttons
+saveWebhookBtn.addEventListener('click', ()=> {
+  const url = (webhookInput.value||'').trim();
+  if(url && !/^https?:\/\//.test(url)){ webhookMsg.textContent = 'Invalid URL (must start with http/https).'; return; }
+  saveWebhook(url);
+});
+clearWebhookBtn.addEventListener('click', ()=> clearWebhook());
+
+// export button
+exportDataBtn.addEventListener('click', ()=> {
+  const key = attemptedKey;
+  const raw = localStorage.getItem(key) || '{}';
+  try {
+    const parsed = JSON.parse(raw);
+    const blob = new Blob([JSON.stringify(parsed, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'css_quiz_attempts_by_rameel.json';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  } catch(e){ alert('No data or JSON parse error.'); console.error(e); }
+});
+
+// populate webhook input if saved
+try{ webhookInput.value = getSavedWebhook(); if(webhookInput.value) webhookMsg.textContent = 'Webhook loaded.'; }catch(e){}
+
+// ---------- beginQuiz ----------
 function beginQuiz(){
-  // prepare question list (full BANK shuffled)
   questions = shuffle(BANK.slice(0,40)); // ensure 40
   current = 0; correct = 0; wrong = 0; perTopic = {};
   questions.forEach(q=> { if(!perTopic[q.topic]) perTopic[q.topic] = {total:0,correct:0,wrong:0}; perTopic[q.topic].total++; });
 
-  // switch UI
   loginSection.classList.add('hidden');
   quizApp.classList.remove('hidden');
 
@@ -166,7 +212,6 @@ function startGlobalTimer(){
     globalTimerEl.textContent = formatTime(totalSecondsLeft);
   }, 1000);
 }
-
 function stopGlobalTimer(){ if(globalTimerId) clearInterval(globalTimerId); }
 
 function startQuestionTimer(){
@@ -177,17 +222,14 @@ function startQuestionTimer(){
     perQuestionSecondsLeft--;
     qTimerEl.textContent = formatTime(perQuestionSecondsLeft);
     if(perQuestionSecondsLeft <= 0){
-      // time up for question: auto mark as wrong if not answered, show correct, then next
       stopQuestionTimer();
       if(!answeredThisQ){
         markWrongDueToTimeout();
       }
-      // small delay to show highlight, then move next
       setTimeout(()=> goNextAfterAuto(), 700);
     }
   }, 1000);
 }
-
 function stopQuestionTimer(){ if(questionTimerId) clearInterval(questionTimerId); }
 
 // ---------- QUESTION RENDER ----------
@@ -200,16 +242,13 @@ function loadQuestion(){
   topicBadge.textContent = item.topic;
   questionText.textContent = item.q;
 
-  // shuffle options
   const opts = shuffle(item.o.slice());
   optionsList.innerHTML = opts.map(o => `<div class="option" tabindex="0">${escapeHtml(o)}</div>`).join('');
-  // attach click
   document.querySelectorAll('.option').forEach(el=>{
     el.addEventListener('click', ()=> selectOption(el, item));
     el.addEventListener('keydown', e=>{ if(e.key === 'Enter') selectOption(el, item); });
   });
 
-  // start per-question timer
   startQuestionTimer();
 }
 
@@ -220,28 +259,24 @@ function unescapeHtml(s){ return String(s).replace(/&lt;/g,'<').replace(/&gt;/g,
 function selectOption(el, item){
   if(answeredThisQ) return;
   answeredThisQ = true;
-  // disable all options
   document.querySelectorAll('.option').forEach(o=>{ o.classList.add('disabled'); o.style.pointerEvents='none'; });
   const chosen = unescapeHtml(el.textContent);
   if(chosen === item.a){
     el.classList.add('correct'); correct++; perTopic[item.topic].correct++;
   } else {
     el.classList.add('wrong'); wrong++; perTopic[item.topic].wrong++;
-    // highlight correct
     document.querySelectorAll('.option').forEach(o=>{
       if(unescapeHtml(o.textContent) === item.a) o.classList.add('correct');
     });
   }
   nextBtn.disabled = false;
   stopQuestionTimer();
-  // do not allow change
 }
 
 // mark wrong due to timeout (no answer)
 function markWrongDueToTimeout(){
   const item = questions[current];
   wrong++; perTopic[item.topic].wrong++;
-  // highlight correct option
   document.querySelectorAll('.option').forEach(o=>{
     if(unescapeHtml(o.textContent) === item.a) o.classList.add('correct');
     o.classList.add('disabled');
@@ -250,22 +285,15 @@ function markWrongDueToTimeout(){
 }
 
 // ---------- NAV ----------
-nextBtn.addEventListener('click', ()=> {
-  if(nextBtn.disabled) return;
-  goNext();
-});
-prevBtn.addEventListener('click', ()=> {
-  if(current>0){ current--; loadQuestion(); }
-});
+nextBtn.addEventListener('click', ()=> { if(nextBtn.disabled) return; goNext(); });
+prevBtn.addEventListener('click', ()=> { if(current>0){ current--; loadQuestion(); } });
 
 function goNext(){
   current++;
   if(current < questions.length){ loadQuestion(); }
   else { finishQuiz(); }
 }
-
 function goNextAfterAuto(){
-  // called after timeout highlight delay
   if(current < questions.length - 1){
     current++;
     loadQuestion();
@@ -275,15 +303,22 @@ function goNextAfterAuto(){
 }
 
 // ---------- FINISH / SUBMIT ----------
-function submitOnTimeout(){
-  // time over for whole quiz - finish
-  finishQuiz();
+function submitOnTimeout(){ finishQuiz(); }
+
+function sendAttemptToServer(name, resultObj){
+  const url = getSavedWebhook();
+  if(!url) return Promise.resolve({ ok: false, reason: 'no-webhook' });
+  const payload = { name: name, result: resultObj, ts: Date.now() };
+  return fetch(url, {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify(payload)
+  }).then(r => r.json ? r : r).catch(err => { console.error('Webhook error', err); return { ok:false, error:err }; });
 }
 
 function finishQuiz(){
   stopGlobalTimer();
   stopQuestionTimer();
-  // disable UI
   nextBtn.disabled = true;
   prevBtn.disabled = true;
 
@@ -299,7 +334,6 @@ function finishQuiz(){
   else msg = "Keep practising — you will improve!";
   resMessage.textContent = msg;
 
-  // topic-wise rows
   topicAnalysis.innerHTML = '';
   Object.keys(perTopic).forEach(t=>{
     const st = perTopic[t];
@@ -310,20 +344,16 @@ function finishQuiz(){
     topicAnalysis.appendChild(div);
   });
 
-  // save attempt to localStorage to prevent re-attempts
   const resultObj = {correct, wrong, percent, timeLeft: totalSecondsLeft};
   markAttempted(userName, resultObj);
+  sendAttemptToServer(userName, resultObj).then(resp=>{ console.log('Webhook response', resp); }).catch(e=>console.error(e));
 
-  // show modal
   resultModal.classList.remove('hidden');
 }
 
 // modal buttons
 closeModalBtn.addEventListener('click', ()=>{ resultModal.classList.add('hidden'); });
 restartBtn.addEventListener('click', ()=>{ window.location.reload(); });
-
-// ---------- UTIL ----------
-function escapeHTML(s){ return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 
 // update visible timers even if not started
 setInterval(()=>{
